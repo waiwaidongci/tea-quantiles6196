@@ -32,6 +32,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-local-demo-tea-quantiles-replace-for-production}
       SEED_DEMO: ${SEED_DEMO:-true}
+      ARTIFACT_DIR: /app/artifacts
+      # 大批量外部排序的内存预算：单排序段 16MB（200万 float 约 250 段），
+      # 归并每路 256KB 缓冲，堆内常驻远低于 256MB。
+      LARGE_SEGMENT_BYTES: ${LARGE_SEGMENT_BYTES:-16777216}
+      LARGE_READER_BYTES: ${LARGE_READER_BYTES:-262144}
+      LARGE_MERGE_FANOUT: ${LARGE_MERGE_FANOUT:-8}
+      LARGE_ECDF_PAGE_ROWS: ${LARGE_ECDF_PAGE_ROWS:-500}
     ports: ["${BACKEND_PORT:-19240}:8000"]
     volumes: ["run-artifacts:/app/artifacts"]
     depends_on:
@@ -54,6 +61,21 @@ services:
       redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.stat('/tmp/worker-heartbeat').st_mtime<15"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+  large-worker:
+    build: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-tea-quantiles}-large-worker
+    command: python -m src.large_worker
+    environment: *app-env
+    volumes: ["run-artifacts:/app/artifacts"]
+    depends_on:
+      backend: {condition: service_healthy}
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.stat('/tmp/large-worker-heartbeat').st_mtime<15"]
       interval: 3s
       timeout: 4s
       retries: 20

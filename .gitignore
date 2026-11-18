@@ -32,3 +32,7 @@ target/
 *.o
 *.obj
 .DS_Store
+
+# 大批量测试本地产物
+tests/.tmp-artifacts/
+.pytest_cache/

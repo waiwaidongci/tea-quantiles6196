@@ -12,6 +12,7 @@
 - 分位数、ECDF与按批bootstrap中位数区间。中位数置信区间描述估计不确定性，不是下一份茶样的预测区间。
 - 每次运行冻结参数、观测和SHA256。Redis任务由独立worker计算，写DB与共享产物卷；输入修改不会改写历史结果。
 - 负责人复核不可覆盖；审计记录登录、数据改动、排队、复核与导出；240请求/分钟限流、全局可恢复错误。
+- **大批量分布研究（200万级，整批入内存不可行时）**：分批接收观测并立即冻结到磁盘（链式SHA256），外部排序分段 + 堆式流式归并，在256MB内存内产出精确分位数与完整ECDF，绝不抽样。分段处理与归并可中断恢复，已落妥片段不重做；输入或片段损坏即停止，拒绝拼用其他输入的片段。计算与ECDF页面读取均不装载全量结果；发布前独立核验输入数、累计数、分位点与ECDF逐页一致，未核验结果不可见。
 
 ## 快速启动
 ```bash
@@ -44,7 +45,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 |API|Python3.11、FastAPI0.115、SQLAlchemy2、JWT、PBKDF2密码|
 |计算|NumPy2.2、SciPy1.15，固定seed42|
 |数据库|PostgreSQL16|
-|任务|Redis7持久队列，Python独立worker，心跳healthcheck|
+|任务|Redis7持久队列，两个独立worker：小批 `src.worker`、大批量 `src.large_worker`，各自心跳healthcheck|
 
 `frontend/src/`分api、stores、types、components/common、hooks、pages、router、utils、constants；`backend/src/`分config、models、schemas、services、controllers、routes、middlewares、utils、constants；`backend/scripts/seed_demo.py`自然键插入、重复不覆盖修改；`backend/migrations/README.md`说明schema版本。
 
@@ -56,5 +57,17 @@ docker compose exec -T backend python -m scripts.seed_demo
 输入为选定批次全部观测和参数，输出核心数值、明细、解释；参数经后端严格白名单和范围验证。中位数置信区间描述估计不确定性，不是下一份茶样的预测区间。。空批次拒绝；不完整字段/非有限数/非法计数拒绝；常量相关列与不足样本使任务failed并保留错误。固定seed42、输入checksum相同可复现。独立oracle：按线性插值手算分位数；固定seed重采样复现；常量与空组边界。
 
 已知边界：小型本地研究应用，使用合成数据，不含企业SSO与外发邮件；结果由人工复核，不自动执行业务决策；单worker恢复queued/running任务，数据库与Redis间未采用分布式事务。以当前测试目录TESTING.md记录实际验证结果。
+
+## 大批量分布研究设计（`backend/src/services/large/`）
+|模块|职责|
+|---|---|
+|`layout.py`|磁盘布局与预算：排序段字节预算、归并读取缓冲、ECDF页大小，全部经环境变量配置且有界|
+|`inputs.py`|分批接收与冻结：逐行校验、JSONL原子落盘、批次SHA256与链式哈希；seal时重核全部批次|
+|`sorting.py`|分段外部排序：单段float64缓冲不超预算，段带SHA256与输入链；恢复时按全局索引确定性重生成，已落妥前缀不重做|
+|`merging.py`|堆式k路流式归并（每路小缓冲）、单遍终遍（Neumaier求和+精确分位点+RLE完整ECDF分页）、发布前独立核验|
+|`pipeline.py`|阶段编排（ingesting→sorting→merging→finalizing→verified），硬错误落failed态|
+|`result.py`|核验通过后组装对外结果；未核验结果不写DB、不可见|
+
+关键保证：分位数与小批研究同为线性插值口径；完整ECDF为全部唯一点序列（RLE分页），单页读取；任何片段的`input_chain`不匹配即判定为其他输入并拒绝；失败态持久化，重载清单即在入口停止。前端“大批量研究/结果/复核”三页展示接收→可用的分段进度，原小批页面与接口保持不变。满规模与中断恢复实测见 `backend/scripts/large_scale_demo.py`、`large_restart_demo.py` 与 `backend/TESTING.md`。
 
 MIT License。

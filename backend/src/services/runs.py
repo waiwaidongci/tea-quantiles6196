@@ -25,7 +25,7 @@ def create(db,data,user):
 def get(db,id):
     run=db.get(Run,id)
     if not run: raise HTTPException(404,'运行不存在')
-    result=record(run);review=db.scalar(select(Review).where(Review.run_id==id));result['review']=record(review) if review else None
+    result=record(run);review=db.scalar(select(Review).where(Review.run_id==id,Review.run_kind=='small'));result['review']=record(review) if review else None
     return result
 
 def list_runs(db):
@@ -35,8 +35,8 @@ def approve(db,id,data,user):
     run=db.get(Run,id)
     if not run: raise HTTPException(404,'运行不存在')
     if run.status!='completed': raise HTTPException(409,'只能复核已完成运行')
-    if db.scalar(select(Review).where(Review.run_id==id)): raise HTTPException(409,'已复核，记录不可覆盖')
-    obj=Review(run_id=id,note=data.note,author=user.email,created_at=now());db.add(obj);log(db,user,'review.approve',f'{id}: {data.note}');db.commit();return record(obj)
+    if db.scalar(select(Review).where(Review.run_id==id,Review.run_kind=='small')): raise HTTPException(409,'已复核，记录不可覆盖')
+    obj=Review(run_id=id,run_kind='small',note=data.note,author=user.email,created_at=now());db.add(obj);log(db,user,'review.approve',f'{id}: {data.note}');db.commit();return record(obj)
 
 def export(db,id,user):
     r=get(db,id)
